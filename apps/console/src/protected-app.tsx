@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2022-2024, WSO2 LLC. (https://www.wso2.com).
+ * Copyright (c) 2022, WSO2 LLC. (https://www.wso2.com).
  *
  * WSO2 LLC. licenses this file to you under the Apache License,
  * Version 2.0 (the "License"); you may not use this file except
@@ -23,14 +23,11 @@ import {
     SecureApp,
     useAuthContext
 } from "@asgardeo/auth-react";
-import {
-    AccessControlProvider,
-    AllFeatureInterface,
-    FeatureGateInterface
-} from "@wso2is/access-control";
+import useUIConfig from "@wso2is/features/admin.core.v1/hooks/use-ui-configs";
 import {
     AppConstants as CommonAppConstants } from "@wso2is/core/constants";
 import { IdentityAppsApiException } from "@wso2is/core/exceptions";
+import { hasRequiredScopes } from "@wso2is/core/helpers";
 import { IdentifiableComponentInterface } from "@wso2is/core/models";
 import {
     setDeploymentConfigs,
@@ -42,33 +39,6 @@ import {
     SessionStorageUtils,
     StringUtils
 } from "@wso2is/core/utils";
-import useSignIn from "@wso2is/features/admin.authentication.v1/hooks/use-sign-in";
-import useAuthorization from "@wso2is/features/admin.authorization.v1/hooks/use-authorization";
-import {
-    AppState,
-    AppUtils,
-    Config,
-    DeploymentConfigInterface,
-    HttpUtils,
-    PreLoader,
-    UIConfigInterface,
-    getAppViewRoutes,
-    setFilteredDevelopRoutes,
-    setSanitizedDevelopRoutes,
-    store
-} from "@wso2is/features/admin.core.v1";
-import { AppConstants } from "@wso2is/features/admin.core.v1/constants";
-import { history } from "@wso2is/features/admin.core.v1/helpers";
-import useUIConfig from "@wso2is/features/admin.core.v1/hooks/use-ui-configs";
-import { commonConfig } from "@wso2is/features/admin.extensions.v1";
-import { useGetAllFeatures } from "@wso2is/features/admin.extensions.v1/components/feature-gate/api/feature-gate";
-import useTenantTier from "@wso2is/features/admin.extensions.v1/components/subscription/api/subscription";
-import { TenantTier } from "@wso2is/features/admin.extensions.v1/components/subscription/models/subscription";
-import { SubscriptionProvider }
-    from "@wso2is/features/admin.extensions.v1/components/subscription/providers/subscription-provider";
-import { featureGateConfig } from "@wso2is/features/admin.extensions.v1/configs/feature-gate";
-import useOrganizationSwitch from "@wso2is/features/admin.organizations.v1/hooks/use-organization-switch";
-import { OrganizationUtils } from "@wso2is/features/admin.organizations.v1/utils";
 import {
     I18n,
     I18nInstanceInitException,
@@ -76,9 +46,9 @@ import {
     LanguageChangeException,
     isLanguageSupported
 } from "@wso2is/i18n";
+import { GovernanceConnectorProvider } from "@wso2is/react-components";
 import axios, { AxiosResponse } from "axios";
 import has from "lodash-es/has";
-import set from "lodash-es/set";
 import React, {
     FunctionComponent,
     LazyExoticComponent,
@@ -90,6 +60,33 @@ import React, {
 import { I18nextProvider } from "react-i18next";
 import { useDispatch, useSelector } from "react-redux";
 import { Dispatch } from "redux";
+import { commonConfig } from "@wso2is/features/admin.extensions.v1";
+import useTenantTier from "@wso2is/features/admin.extensions.v1/components/subscription/api/subscription";
+import { TenantTier } from "@wso2is/features/admin.extensions.v1/components/subscription/models/subscription";
+import { SubscriptionProvider } from "@wso2is/features/admin.extensions.v1/components/subscription/providers/subscription-provider";
+import useSignIn from "@wso2is/features/admin.authentication.v1/hooks/use-sign-in";
+import {
+    AppState,
+    AppUtils,
+    Config,
+    DeploymentConfigInterface,
+    FeatureConfigInterface,
+    HttpUtils,
+    PreLoader,
+    UIConfigInterface,
+    getAppViewRoutes,
+    setFilteredDevelopRoutes,
+    setSanitizedDevelopRoutes,
+    store
+} from "@wso2is/features/admin.core.v1";
+import { AppConstants } from "@wso2is/features/admin.core.v1/constants";
+import { history } from "@wso2is/features/admin.core.v1/helpers";
+import useRoutes from "@wso2is/features/admin.core.v1/hooks/use-routes";
+import useOrganizationSwitch from "@wso2is/features/admin.organizations.v1/hooks/use-organization-switch";
+import {
+    GovernanceCategoryForOrgsInterface,
+    useGovernanceConnectorCategories
+} from "@wso2is/features/admin.server-configurations.v1";
 
 const App: LazyExoticComponent<FunctionComponent> = lazy(() => import("./app"));
 
@@ -101,13 +98,10 @@ type AppPropsInterface = IdentifiableComponentInterface;
  * @returns ProtectedApp component (React Element)
  */
 export const ProtectedApp: FunctionComponent<AppPropsInterface> = (): ReactElement => {
-    const featureGateConfigUpdated : FeatureGateInterface = { ...featureGateConfig };
-
     const {
         on,
         signIn,
-        getDecodedIDToken,
-        state
+        state: { isAuthenticated }
     } = useAuthContext();
 
     const dispatch: Dispatch<any> = useDispatch();
@@ -116,24 +110,31 @@ export const ProtectedApp: FunctionComponent<AppPropsInterface> = (): ReactEleme
 
     const { switchOrganization } = useOrganizationSwitch();
 
-    const { legacyAuthzRuntime }  = useAuthorization();
+    const { filterRoutes } = useRoutes();
 
     const { setUIConfig } = useUIConfig();
 
     const { data: tenantTier } = useTenantTier();
 
-    const organizationType: string = useSelector((state: AppState) => state?.organization?.organizationType);
+    const featureConfig: FeatureConfigInterface = useSelector(
+        (state: AppState) => state.config.ui.features
+    );
+    const isFirstLevelOrg: boolean = useSelector(
+        (state: AppState) => state.organization.isFirstLevelOrganization
+    );
     const allowedScopes: string = useSelector((state: AppState) => state?.auth?.allowedScopes);
 
-    const [ featureGateConfigData, setFeatureGateConfigData ] =
-        useState<FeatureGateInterface | null>(featureGateConfigUpdated);
-    const [ renderApp, setRenderApp ] = useState<boolean>(false);
-    const [ orgId, setOrgId ] = useState<string>();
-
     const {
-        data: allFeatures,
-        error: featureGateAPIException
-    } = useGetAllFeatures(orgId, state.isAuthenticated);
+        data: originalConnectorCategories,
+        error: connectorCategoriesFetchRequestError
+    } = useGovernanceConnectorCategories(
+        featureConfig?.server?.enabled && isFirstLevelOrg &&
+        hasRequiredScopes(featureConfig?.governanceConnectors, featureConfig?.governanceConnectors?.scopes?.read,
+            allowedScopes));
+
+    const [ renderApp, setRenderApp ] = useState<boolean>(false);
+    const [ routesFiltered, setRoutesFiltered ] = useState<boolean>(false);
+    const [ governanceConnectors, setGovernanceConnectors ] = useState<GovernanceCategoryForOrgsInterface[]>([]);
 
     useEffect(() => {
         dispatch(
@@ -194,49 +195,14 @@ export const ProtectedApp: FunctionComponent<AppPropsInterface> = (): ReactEleme
     }, []);
 
     useEffect(() => {
-        if (allFeatures instanceof IdentityAppsApiException || featureGateAPIException) {
+        if (!originalConnectorCategories ||
+            originalConnectorCategories instanceof IdentityAppsApiException ||
+            connectorCategoriesFetchRequestError) {
             return;
         }
 
-        if (!allFeatures) {
-            return;
-        }
-
-        if (allFeatures?.length > 0) {
-            allFeatures.forEach((feature: AllFeatureInterface )=> {
-                // converting the identifier to path.
-                const path: string = feature.featureIdentifier.replace(/-/g, ".");
-                // Obtain the status and set it to the feature gate config.
-                const featureStatusPath: string = `${ path }.status`;
-
-                set(featureGateConfigUpdated,featureStatusPath, feature.featureStatus);
-
-                const featureTagPath: string = `${ path }.tags`;
-
-                set(featureGateConfigUpdated,featureTagPath, feature.featureTags);
-
-                setFeatureGateConfigData(featureGateConfigUpdated);
-            });
-        }
-    }, [ allFeatures ]);
-
-    useEffect(() => {
-        if(state.isAuthenticated) {
-            if (OrganizationUtils.isSuperOrganization(store.getState().organization.organization)
-            || store.getState().organization.isFirstLevelOrganization) {
-                getDecodedIDToken().then((response: DecodedIDTokenPayload)=>{
-                    const orgName: string = response.org_name;
-                    // Set org_name instead of org_uuid as the API expects org_name
-                    // as it resolves tenant uuid from it.
-
-                    setOrgId(orgName);
-                });
-            } else {
-                // Set the sub org id to the current organization id.
-                setOrgId(store.getState().organization.organization.id);
-            }
-        }
-    }, [ state ]);
+        setGovernanceConnectors(originalConnectorCategories);
+    }, [ originalConnectorCategories ]);
 
     const loginSuccessRedirect = (idToken: DecodedIDTokenPayload): void => {
         const AuthenticationCallbackUrl: string = CommonAuthenticateUtils.getAuthenticationCallbackUrl(
@@ -306,6 +272,14 @@ export const ProtectedApp: FunctionComponent<AppPropsInterface> = (): ReactEleme
     };
 
     useEffect(() => {
+        if (!isAuthenticated) {
+            return;
+        }
+
+        filterRoutes(() => setRoutesFiltered(true), isFirstLevelOrg);
+    }, [ filterRoutes, governanceConnectors, isAuthenticated, isFirstLevelOrg ]);
+
+    useEffect(() => {
         const error: string = new URLSearchParams(location.search).get(
             "error_description"
         );
@@ -326,7 +300,7 @@ export const ProtectedApp: FunctionComponent<AppPropsInterface> = (): ReactEleme
      * Load localization files.
      */
     useEffect(() => {
-        if (!state.isAuthenticated) {
+        if (!isAuthenticated) {
             return;
         }
 
@@ -390,7 +364,7 @@ export const ProtectedApp: FunctionComponent<AppPropsInterface> = (): ReactEleme
             .catch((error: any) => {
                 throw new I18nInstanceInitException(error);
             });
-    }, [ state.isAuthenticated ]);
+    }, [ isAuthenticated ]);
 
     return (
         <SecureApp
@@ -405,18 +379,13 @@ export const ProtectedApp: FunctionComponent<AppPropsInterface> = (): ReactEleme
                 }
             } }
         >
-            <AccessControlProvider
-                allowedScopes={ allowedScopes }
-                features={ featureGateConfigData }
-                isLegacyRuntimeEnabled={ legacyAuthzRuntime }
-                organizationType={ organizationType }
-            >
+            <GovernanceConnectorProvider connectorCategories={ governanceConnectors }>
                 <I18nextProvider i18n={ I18n.instance }>
                     <SubscriptionProvider tierName={ tenantTier?.tierName ?? TenantTier.FREE }>
-                        { renderApp ? <App /> : <PreLoader /> }
+                        { renderApp && routesFiltered ? <App /> : <PreLoader /> }
                     </SubscriptionProvider>
                 </I18nextProvider>
-            </AccessControlProvider>
+            </GovernanceConnectorProvider>
         </SecureApp>
     );
 };

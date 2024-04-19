@@ -26,15 +26,11 @@ import { AccessControlContextPropsInterface } from "../models/access-control";
 const useRequiredScopes = (scopes: string[]): boolean => {
     const accessControlContext: AccessControlContextPropsInterface = useContext(AccessControlContext);
 
-    if (accessControlContext === undefined) {
-        throw new Error("useRequiredScopes must be used within a AccessControlProvider");
-    }
-
     return hasRequiredScopes(
         scopes,
-        accessControlContext?.allowedScopes,
-        accessControlContext?.organizationType,
-        accessControlContext?.isLegacyRuntimeEnabled
+        accessControlContext.allowedScopes,
+        accessControlContext.organizationType,
+        accessControlContext.isLegacyRuntimeEnabled
     );
 };
 

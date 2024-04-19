@@ -77,8 +77,7 @@ export const Show: FunctionComponent<PropsWithChildren<AccessControlShowInterfac
     const hasScopesToShow: boolean = useRequiredScopes(when);
     const hasScopesToHide: boolean = useRequiredScopes(notWhen);
 
-    // By default, show the component.
-    let showOn: boolean = true;
+    let showOn: boolean = false;
     let hideOn: boolean = false;
 
     // If `when` is defined, use the hook to check if the user has the required scopes.
